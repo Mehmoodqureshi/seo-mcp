@@ -44,8 +44,14 @@ export async function fetchText(url: string, timeoutMs = 15000): Promise<FetchRe
   }
 }
 
-/** HEAD a URL, returning just its status (used for broken-link checks). Falls back to GET if HEAD is blocked. */
-export async function statusOf(url: string, timeoutMs = 10000): Promise<number> {
+/** Result of a link liveness probe. `status` of 0 means it never got an HTTP response. */
+export interface LinkStatus {
+  status: number;
+  reason?: string; // populated only when status === 0 (timeout / DNS / TLS / etc.)
+}
+
+/** HEAD a URL, returning its status (used for broken-link checks). Falls back to GET if HEAD is blocked. */
+export async function statusOf(url: string, timeoutMs = 10000): Promise<LinkStatus> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -53,12 +59,32 @@ export async function statusOf(url: string, timeoutMs = 10000): Promise<number> 
     if (res.status === 405 || res.status === 501) {
       res = await fetch(url, { method: 'GET', headers: { 'User-Agent': UA }, redirect: 'follow', signal: ctrl.signal });
     }
-    return res.status;
-  } catch {
-    return 0; // 0 = network error / unreachable
+    return { status: res.status };
+  } catch (err) {
+    // 0 = no HTTP response at all. Distinguish timeout from other network errors.
+    const reason = ctrl.signal.aborted ? `timeout after ${timeoutMs}ms` : err instanceof Error ? err.message : String(err);
+    return { status: 0, reason };
   } finally {
     clearTimeout(t);
   }
+}
+
+/**
+ * Map `items` through async `fn` with at most `limit` in flight at once.
+ * Preserves input order in the returned array.
+ */
+export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /** Normalize a user-supplied target into an absolute http(s) URL. */

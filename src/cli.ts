@@ -25,10 +25,12 @@ async function main(): Promise<void> {
       [
         'seo-mcp — an SEO MCP server (stdio).',
         '',
-        'Tools: audit_page, check_robots, check_sitemap, extract_schema, find_broken_links, keyword_ideas',
+        'Tools: audit_page, check_robots, check_sitemap, extract_schema, find_broken_links, keyword_ideas, pagespeed',
         '',
         'Usage: seo-mcp            # run as an MCP stdio server (launched by an MCP host)',
         '       seo-mcp --version',
+        '',
+        'Env:   PAGESPEED_API_KEY # optional — raises the PageSpeed Insights quota (the pagespeed tool also works keyless)',
         '',
       ].join('\n'),
     );

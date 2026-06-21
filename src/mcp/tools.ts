@@ -16,6 +16,7 @@ import {
   findBrokenLinks,
   keywordIdeas,
 } from '../seo/audit';
+import { pageSpeed } from '../seo/pagespeed';
 
 type JsonSchema = { type: 'object'; properties: Record<string, unknown>; required: string[] };
 const obj = (properties: Record<string, unknown>, required: string[] = []): JsonSchema => ({
@@ -34,8 +35,15 @@ export const TOOL_DEFINITIONS: ToolDef[] = [
   {
     name: 'audit_page',
     description:
-      'Full on-page SEO audit of a URL: title, meta description, canonical, robots, viewport, Open Graph/Twitter, heading outline, word count, image alt coverage, internal/external link counts, structured-data presence, plus a list of issues and a 0–100 score. Free, no API key.',
-    inputSchema: obj({ url: { type: 'string', description: 'Page URL (https:// optional)' } }, ['url']),
+      'Full on-page SEO audit of a URL: title, meta description, canonical, robots, viewport, Open Graph/Twitter, heading outline, word count, image alt coverage, internal/external link counts, structured-data presence, plus a list of issues and a 0–100 score. Free, no API key. Set pagespeed=true to also attach PageSpeed Insights performance metrics.',
+    inputSchema: obj(
+      {
+        url: { type: 'string', description: 'Page URL (https:// optional)' },
+        pagespeed: { type: 'boolean', description: 'Also run PageSpeed Insights and attach performance metrics (default false)' },
+        strategy: { type: 'string', description: 'PageSpeed strategy when pagespeed=true: "mobile" (default) or "desktop"' },
+      },
+      ['url'],
+    ),
   },
   {
     name: 'check_robots',
@@ -68,6 +76,18 @@ export const TOOL_DEFINITIONS: ToolDef[] = [
       ['seed'],
     ),
   },
+  {
+    name: 'pagespeed',
+    description:
+      'Run Google PageSpeed Insights (Lighthouse): performance score (0–100), lab Core Web Vitals (LCP, CLS, TBT, FCP, Speed Index, TTI), real-user CrUX field data when available (LCP, CLS, INP, FCP, TTFB), and the top improvement opportunities. Works keyless (rate-limited); set PAGESPEED_API_KEY to raise the quota.',
+    inputSchema: obj(
+      {
+        url: { type: 'string', description: 'Page URL' },
+        strategy: { type: 'string', description: '"mobile" (default) or "desktop"' },
+      },
+      ['url'],
+    ),
+  },
 ];
 
 type Args = Record<string, unknown>;
@@ -87,12 +107,14 @@ function errorResult(message: string): ToolResult {
 }
 
 export const TOOL_HANDLERS: Record<string, (a: Args) => Promise<ToolResult>> = {
-  audit_page: async (a) => jsonResult(await auditPage(str(a, 'url'))),
+  audit_page: async (a) =>
+    jsonResult(await auditPage(str(a, 'url'), { pagespeed: a.pagespeed === true, strategy: a.strategy === 'desktop' ? 'desktop' : 'mobile' })),
   check_robots: async (a) => jsonResult(await checkRobots(str(a, 'url'))),
   check_sitemap: async (a) => jsonResult(await checkSitemap(str(a, 'url'))),
   extract_schema: async (a) => jsonResult(await extractSchema(str(a, 'url'))),
   find_broken_links: async (a) => jsonResult(await findBrokenLinks(str(a, 'url'), typeof a.max === 'number' ? a.max : 50)),
   keyword_ideas: async (a) => jsonResult(await keywordIdeas(str(a, 'seed'), typeof a.lang === 'string' ? a.lang : 'en')),
+  pagespeed: async (a) => jsonResult(await pageSpeed(str(a, 'url'), a.strategy === 'desktop' ? 'desktop' : 'mobile')),
 };
 
 /** Never-throw firewall: any handler error becomes an `isError` text result. */

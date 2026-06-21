@@ -5,16 +5,27 @@
  * object the tool layer serializes to JSON. No network here except where noted.
  */
 import * as cheerio from 'cheerio';
-import { fetchText, statusOf, normalizeUrl, originOf } from './http';
+import { fetchText, statusOf, normalizeUrl, originOf, mapPool } from './http';
+import { pageSpeed, type Strategy } from './pagespeed';
 
 export interface Issue {
   severity: 'error' | 'warning' | 'info';
   message: string;
 }
 
+export interface AuditOptions {
+  /** Also run PageSpeed Insights and attach lab/field metrics under `pagespeed`. */
+  pagespeed?: boolean;
+  /** PSI strategy when `pagespeed` is enabled (default "mobile"). */
+  strategy?: Strategy;
+}
+
 /** Full single-page on-page audit. */
-export async function auditPage(rawUrl: string) {
+export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
   const url = normalizeUrl(rawUrl);
+  // Kick off the (slower) PageSpeed call concurrently with the page fetch so the
+  // combined audit isn't fetch-then-PSI serialized.
+  const psiPromise = opts.pagespeed ? pageSpeed(url, opts.strategy ?? 'mobile') : null;
   const res = await fetchText(url);
   const issues: Issue[] = [];
 
@@ -68,8 +79,11 @@ export async function auditPage(rawUrl: string) {
   if (h1s.length === 0) issues.push({ severity: 'error', message: 'No <h1> on the page' });
   else if (h1s.length > 1) issues.push({ severity: 'warning', message: `${h1s.length} <h1> tags (prefer exactly one)` });
 
-  // Word count (visible body text)
-  const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+  // Word count (visible body text). Clone the body and drop non-content nodes
+  // first so <script>/<style>/etc. contents don't inflate the count.
+  const $body = $('body').clone();
+  $body.find('script, style, noscript, template, svg').remove();
+  const bodyText = $body.text().replace(/\s+/g, ' ').trim();
   const wordCount = bodyText ? bodyText.split(' ').length : 0;
   if (wordCount < 300) issues.push({ severity: 'info', message: `Only ~${wordCount} words (thin content)` });
 
@@ -101,6 +115,12 @@ export async function auditPage(rawUrl: string) {
   const jsonLdBlocks = $('script[type="application/ld+json"]').length;
   if (jsonLdBlocks === 0) issues.push({ severity: 'info', message: 'No JSON-LD structured data' });
 
+  // Optional PageSpeed (awaited here — it was started before the fetch above).
+  const pagespeed = psiPromise ? await psiPromise : undefined;
+  if (pagespeed?.ok && typeof pagespeed.performanceScore === 'number' && pagespeed.performanceScore < 50) {
+    issues.push({ severity: 'warning', message: `Low PageSpeed performance score: ${pagespeed.performanceScore}/100 (${pagespeed.strategy})` });
+  }
+
   return {
     url: res.finalUrl,
     requestedUrl: url,
@@ -125,6 +145,7 @@ export async function auditPage(rawUrl: string) {
     structuredDataBlocks: jsonLdBlocks,
     issues,
     score: scoreFromIssues(issues),
+    ...(pagespeed ? { pagespeed } : {}),
   };
 }
 
@@ -201,6 +222,7 @@ export async function extractSchema(rawUrl: string) {
   const blocks: unknown[] = [];
   const types = new Set<string>();
   const errors: string[] = [];
+  if (!res.ok) errors.push(`HTTP ${res.status} — page did not return 200 OK; results may be empty or unreliable`);
 
   $('script[type="application/ld+json"]').each((i, el) => {
     const txt = $(el).contents().text();
@@ -218,6 +240,8 @@ export async function extractSchema(rawUrl: string) {
 
   return {
     url: res.finalUrl,
+    ok: res.ok,
+    status: res.status,
     jsonLdBlocks: blocks.length,
     schemaTypes: [...types],
     microdataTypes,
@@ -237,11 +261,14 @@ function collectTypes(node: unknown, out: Set<string>): void {
   }
 }
 
-/** Check every link on a page with HEAD requests; report broken ones. */
-export async function findBrokenLinks(rawUrl: string, max = 50) {
+/** Check links on a page with HEAD requests (bounded concurrency); report broken ones. */
+export async function findBrokenLinks(rawUrl: string, max = 50, concurrency = 8) {
   const url = normalizeUrl(rawUrl);
   const res = await fetchText(url);
   const $ = cheerio.load(res.body);
+
+  // Collect ALL unique http(s) links on the page, then cap — so the limit takes a
+  // deduped slice rather than stopping at the first `max` raw hrefs in DOM order.
   const seen = new Set<string>();
   for (const el of $('a[href]').toArray()) {
     const href = $(el).attr('href')!;
@@ -249,14 +276,25 @@ export async function findBrokenLinks(rawUrl: string, max = 50) {
       const abs = new URL(href, res.finalUrl);
       if (abs.protocol === 'http:' || abs.protocol === 'https:') seen.add(abs.toString());
     } catch {
-      /* ignore */
+      /* ignore malformed */
     }
-    if (seen.size >= max) break;
   }
-  const links = [...seen];
-  const results = await Promise.all(links.map(async (l) => ({ url: l, status: await statusOf(l) })));
+  const totalUnique = seen.size;
+  const links = [...seen].slice(0, max);
+
+  const results = await mapPool(links, concurrency, async (l) => {
+    const { status, reason } = await statusOf(l);
+    return reason ? { url: l, status, reason } : { url: l, status };
+  });
   const broken = results.filter((r) => r.status === 0 || r.status >= 400);
-  return { url: res.finalUrl, checked: links.length, brokenCount: broken.length, broken, truncated: seen.size >= max };
+  return {
+    url: res.finalUrl,
+    uniqueLinks: totalUnique,
+    checked: links.length,
+    brokenCount: broken.length,
+    broken,
+    truncated: totalUnique > links.length,
+  };
 }
 
 /** Free keyword ideas via Google's public Suggest endpoint (no key, no volumes). */

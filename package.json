@@ -19,8 +19,7 @@
     "model-context-protocol",
     "seo",
     "on-page-seo",
-    "technical-seo",
-    "claude"
+    "technical-seo"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
