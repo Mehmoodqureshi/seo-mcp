@@ -1,0 +1,44 @@
+{
+  "name": "@mehmoodqureshi/seo-mcp",
+  "version": "0.1.0",
+  "description": "An SEO MCP server (stdio CLI). Free, keyless on-page/technical SEO tools — page audit, robots.txt, sitemap, structured-data, and keyword ideas — plus optional Google PageSpeed when a key is provided.",
+  "author": "Mehmood Ur Rehman Qureshi",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "seo-mcp": "dist/src/cli.js"
+  },
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "seo",
+    "on-page-seo",
+    "technical-seo",
+    "claude"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rimraf dist",
+    "start": "node dist/src/cli.js",
+    "prepack": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "cheerio": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "rimraf": "^5.0.0",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
