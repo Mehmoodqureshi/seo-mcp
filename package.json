@@ -4,6 +4,14 @@
   "description": "An SEO MCP server (stdio CLI). Free, keyless on-page/technical SEO tools — page audit, robots.txt, sitemap, structured-data, and keyword ideas — plus optional Google PageSpeed when a key is provided.",
   "author": "Mehmood Ur Rehman Qureshi",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mehmoodqureshi/seo-mcp.git"
+  },
+  "homepage": "https://github.com/Mehmoodqureshi/seo-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Mehmoodqureshi/seo-mcp/issues"
+  },
   "type": "commonjs",
   "bin": {
     "seo-mcp": "dist/src/cli.js"
@@ -30,10 +38,12 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "cheerio": "^1.0.0"
+    "cheerio": "^1.0.0",
+    "pdfkit": "^0.15.2"
   },
   "devDependencies": {
     "@types/node": "^20.17.10",
+    "@types/pdfkit": "^0.17.6",
     "rimraf": "^5.0.0",
     "typescript": "^5.7.2"
   },

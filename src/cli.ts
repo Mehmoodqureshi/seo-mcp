@@ -25,7 +25,7 @@ async function main(): Promise<void> {
       [
         'seo-mcp — an SEO MCP server (stdio).',
         '',
-        'Tools: audit_page, check_robots, check_sitemap, extract_schema, find_broken_links, keyword_ideas, pagespeed',
+        'Tools: audit_page, export_audit_pdf, check_robots, check_sitemap, extract_schema, find_broken_links, keyword_ideas, pagespeed',
         '',
         'Usage: seo-mcp            # run as an MCP stdio server (launched by an MCP host)',
         '       seo-mcp --version',

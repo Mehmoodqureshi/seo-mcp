@@ -4,3 +4,6 @@ dist/
 .DS_Store
 .env
 .claude/settings.local.json
+
+# Generated SEO audit reports — never commit
+audits/

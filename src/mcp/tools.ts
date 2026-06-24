@@ -17,6 +17,7 @@ import {
   keywordIdeas,
 } from '../seo/audit';
 import { pageSpeed } from '../seo/pagespeed';
+import { renderAuditPdf } from '../seo/pdf';
 
 type JsonSchema = { type: 'object'; properties: Record<string, unknown>; required: string[] };
 const obj = (properties: Record<string, unknown>, required: string[] = []): JsonSchema => ({
@@ -35,11 +36,25 @@ export const TOOL_DEFINITIONS: ToolDef[] = [
   {
     name: 'audit_page',
     description:
-      'Full on-page SEO audit of a URL: title, meta description, canonical, robots, viewport, Open Graph/Twitter, heading outline, word count, image alt coverage, internal/external link counts, structured-data presence, plus a list of issues and a 0–100 score. Free, no API key. Set pagespeed=true to also attach PageSpeed Insights performance metrics.',
+      'Full on-page SEO audit of a URL: title, meta description, canonical, robots, viewport, Open Graph/Twitter, heading outline, word count, image alt coverage, internal/external link counts, structured-data presence, plus a list of issues and a 0–100 score. Free, no API key. Set pagespeed=true to also attach PageSpeed Insights performance metrics. After presenting the results, ASK THE USER whether they want a professionally formatted PDF report; if they say yes, call export_audit_pdf with the same url (and same pagespeed/strategy).',
     inputSchema: obj(
       {
         url: { type: 'string', description: 'Page URL (https:// optional)' },
         pagespeed: { type: 'boolean', description: 'Also run PageSpeed Insights and attach performance metrics (default false)' },
+        strategy: { type: 'string', description: 'PageSpeed strategy when pagespeed=true: "mobile" (default) or "desktop"' },
+      },
+      ['url'],
+    ),
+  },
+  {
+    name: 'export_audit_pdf',
+    description:
+      'Generate a professionally laid-out PDF report of an on-page SEO audit (score badge, summary cards, severity-colored issue list, metadata, content/structure, social tags, and optional PageSpeed metrics). Re-runs the audit for the URL and writes a .pdf to disk, returning the file path. Use this after audit_page when the user asks for a PDF report.',
+    inputSchema: obj(
+      {
+        url: { type: 'string', description: 'Page URL to audit and export (https:// optional)' },
+        path: { type: 'string', description: 'Output file path (default: ./seo-audit-<host>-<date>.pdf in the current directory). ".pdf" is appended if missing.' },
+        pagespeed: { type: 'boolean', description: 'Also run PageSpeed Insights and include performance metrics in the report (default false)' },
         strategy: { type: 'string', description: 'PageSpeed strategy when pagespeed=true: "mobile" (default) or "desktop"' },
       },
       ['url'],
@@ -107,8 +122,22 @@ function errorResult(message: string): ToolResult {
 }
 
 export const TOOL_HANDLERS: Record<string, (a: Args) => Promise<ToolResult>> = {
-  audit_page: async (a) =>
-    jsonResult(await auditPage(str(a, 'url'), { pagespeed: a.pagespeed === true, strategy: a.strategy === 'desktop' ? 'desktop' : 'mobile' })),
+  audit_page: async (a) => {
+    const audit = await auditPage(str(a, 'url'), { pagespeed: a.pagespeed === true, strategy: a.strategy === 'desktop' ? 'desktop' : 'mobile' });
+    return jsonResult({
+      ...audit,
+      pdfReport: {
+        available: true,
+        hint: 'A professionally formatted PDF report of this audit can be generated. Ask the user whether they want it; if yes, call export_audit_pdf with the same url.',
+      },
+    });
+  },
+  export_audit_pdf: async (a) => {
+    const url = str(a, 'url');
+    const audit = await auditPage(url, { pagespeed: a.pagespeed === true, strategy: a.strategy === 'desktop' ? 'desktop' : 'mobile' });
+    const path = await renderAuditPdf(audit, typeof a.path === 'string' ? a.path : undefined);
+    return jsonResult({ ok: true, path, url: audit.url, score: audit.score, issues: audit.issues.length, message: `PDF report written to ${path}` });
+  },
   check_robots: async (a) => jsonResult(await checkRobots(str(a, 'url'))),
   check_sitemap: async (a) => jsonResult(await checkSitemap(str(a, 'url'))),
   extract_schema: async (a) => jsonResult(await extractSchema(str(a, 'url'))),
