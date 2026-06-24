@@ -17,6 +17,7 @@ import {
   keywordIdeas,
 } from '../seo/audit';
 import { pageSpeed } from '../seo/pagespeed';
+import { pageSpeedLocal } from '../seo/lighthouse-local';
 import { renderAuditPdf } from '../seo/pdf';
 
 type JsonSchema = { type: 'object'; properties: Record<string, unknown>; required: string[] };
@@ -94,11 +95,12 @@ export const TOOL_DEFINITIONS: ToolDef[] = [
   {
     name: 'pagespeed',
     description:
-      'Run Google PageSpeed Insights (Lighthouse): performance score (0–100), lab Core Web Vitals (LCP, CLS, TBT, FCP, Speed Index, TTI), real-user CrUX field data when available (LCP, CLS, INP, FCP, TTFB), and the top improvement opportunities. Works keyless (rate-limited); set PAGESPEED_API_KEY to raise the quota.',
+      'Run Lighthouse for performance score (0–100), lab Core Web Vitals (LCP, CLS, TBT, FCP, Speed Index, TTI), and top improvement opportunities. Default engine is Google PageSpeed Insights (hosted; adds real-user CrUX field data when available; keyless but rate-limited — set PAGESPEED_API_KEY to raise the quota), and it auto-falls-back to a LOCAL Lighthouse run if PSI is over quota. Set local=true to force the local engine (no key, no quota; needs Chrome on the host; no CrUX field data; runs headless Chrome silently).',
     inputSchema: obj(
       {
         url: { type: 'string', description: 'Page URL' },
         strategy: { type: 'string', description: '"mobile" (default) or "desktop"' },
+        local: { type: 'boolean', description: 'Force the local Lighthouse engine instead of Google PSI (no API key/quota; requires Chrome installed; lab metrics only). Default false.' },
       },
       ['url'],
     ),
@@ -143,7 +145,20 @@ export const TOOL_HANDLERS: Record<string, (a: Args) => Promise<ToolResult>> = {
   extract_schema: async (a) => jsonResult(await extractSchema(str(a, 'url'))),
   find_broken_links: async (a) => jsonResult(await findBrokenLinks(str(a, 'url'), typeof a.max === 'number' ? a.max : 50)),
   keyword_ideas: async (a) => jsonResult(await keywordIdeas(str(a, 'seed'), typeof a.lang === 'string' ? a.lang : 'en')),
-  pagespeed: async (a) => jsonResult(await pageSpeed(str(a, 'url'), a.strategy === 'desktop' ? 'desktop' : 'mobile')),
+  pagespeed: async (a) => {
+    const url = str(a, 'url');
+    const strategy = a.strategy === 'desktop' ? 'desktop' : 'mobile';
+    if (a.local === true) return jsonResult(await pageSpeedLocal(url, strategy));
+
+    const psi = await pageSpeed(url, strategy);
+    const psiError = (psi as { error?: string }).error ?? '';
+    // Auto-fall-back to local Lighthouse when PSI fails on quota / rate limiting.
+    if (psi.ok === false && /quota|rate.?limit|RESOURCE_EXHAUSTED|\b429\b/i.test(psiError)) {
+      const local = await pageSpeedLocal(url, strategy);
+      return jsonResult({ ...local, fellBackFrom: 'psi', psiError });
+    }
+    return jsonResult(psi);
+  },
 };
 
 /** Never-throw firewall: any handler error becomes an `isError` text result. */

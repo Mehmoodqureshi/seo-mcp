@@ -41,6 +41,10 @@
     "cheerio": "^1.0.0",
     "pdfkit": "^0.15.2"
   },
+  "optionalDependencies": {
+    "chrome-launcher": "^1.2.1",
+    "lighthouse": "^12.8.2"
+  },
   "devDependencies": {
     "@types/node": "^20.17.10",
     "@types/pdfkit": "^0.17.6",

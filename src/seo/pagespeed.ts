@@ -51,6 +51,56 @@ function fieldMetric(metrics: Record<string, any> | undefined, id: string): Fiel
   };
 }
 
+/** The lab half of a result: Lighthouse score + Core Web Vitals + top opportunities. */
+export interface LighthouseLab {
+  performanceScore: number | null;
+  lab: {
+    firstContentfulPaint: MetricValue;
+    largestContentfulPaint: MetricValue;
+    cumulativeLayoutShift: MetricValue;
+    totalBlockingTime: MetricValue;
+    speedIndex: MetricValue;
+    timeToInteractive: MetricValue;
+  };
+  opportunities: Array<{ id: string; title: string; estimatedSavingsMs: number }>;
+  fetchedAt: string | null;
+  finalUrl: string | null;
+}
+
+/**
+ * Parse a Lighthouse result object (`lighthouseResult` from PSI, or `runner.lhr`
+ * from a local Lighthouse run — same shape) into score + lab CWV + opportunities.
+ * Shared so the hosted (PSI) and local engines produce identical output.
+ */
+export function parseLighthouse(lh: Record<string, any>): LighthouseLab {
+  const audits: Record<string, any> = lh.audits ?? {};
+  const perfScoreRaw = lh.categories?.performance?.score;
+  const performanceScore = typeof perfScoreRaw === 'number' ? Math.round(perfScoreRaw * 100) : null;
+
+  const lab = {
+    firstContentfulPaint: labMetric(audits, 'first-contentful-paint'),
+    largestContentfulPaint: labMetric(audits, 'largest-contentful-paint'),
+    cumulativeLayoutShift: labMetric(audits, 'cumulative-layout-shift'),
+    totalBlockingTime: labMetric(audits, 'total-blocking-time'),
+    speedIndex: labMetric(audits, 'speed-index'),
+    timeToInteractive: labMetric(audits, 'interactive'),
+  };
+
+  const opportunities = Object.values(audits)
+    .filter((a: any) => a?.details?.type === 'opportunity' && typeof a?.details?.overallSavingsMs === 'number' && a.details.overallSavingsMs > 0)
+    .map((a: any) => ({ id: a.id, title: a.title, estimatedSavingsMs: Math.round(a.details.overallSavingsMs) }))
+    .sort((x, y) => y.estimatedSavingsMs - x.estimatedSavingsMs)
+    .slice(0, 5);
+
+  return {
+    performanceScore,
+    lab,
+    opportunities,
+    fetchedAt: lh.fetchTime ?? null,
+    finalUrl: lh.finalDisplayedUrl ?? lh.finalUrl ?? null,
+  };
+}
+
 /**
  * Run PageSpeed Insights for a URL.
  * Never throws on a PSI error response — surfaces it in the result instead.
@@ -92,19 +142,7 @@ export async function pageSpeed(rawUrl: string, strategy: Strategy = 'mobile') {
   }
 
   const lh = data.lighthouseResult ?? {};
-  const audits: Record<string, any> = lh.audits ?? {};
-  const perfScoreRaw = lh.categories?.performance?.score;
-  const performanceScore = typeof perfScoreRaw === 'number' ? Math.round(perfScoreRaw * 100) : null;
-
-  // Lab (synthetic) Core Web Vitals + key timings.
-  const lab = {
-    firstContentfulPaint: labMetric(audits, 'first-contentful-paint'),
-    largestContentfulPaint: labMetric(audits, 'largest-contentful-paint'),
-    cumulativeLayoutShift: labMetric(audits, 'cumulative-layout-shift'),
-    totalBlockingTime: labMetric(audits, 'total-blocking-time'),
-    speedIndex: labMetric(audits, 'speed-index'),
-    timeToInteractive: labMetric(audits, 'interactive'),
-  };
+  const parsed = parseLighthouse(lh);
 
   // Field (CrUX real-user) data — may be absent for low-traffic URLs.
   const le = data.loadingExperience;
@@ -120,23 +158,17 @@ export async function pageSpeed(rawUrl: string, strategy: Strategy = 'mobile') {
       }
     : null;
 
-  // Top improvement opportunities (audits Lighthouse flags as recoverable time).
-  const opportunities = Object.values(audits)
-    .filter((a: any) => a?.details?.type === 'opportunity' && typeof a?.details?.overallSavingsMs === 'number' && a.details.overallSavingsMs > 0)
-    .map((a: any) => ({ id: a.id, title: a.title, estimatedSavingsMs: Math.round(a.details.overallSavingsMs) }))
-    .sort((x, y) => y.estimatedSavingsMs - x.estimatedSavingsMs)
-    .slice(0, 5);
-
   return {
-    url: lh.finalUrl ?? url,
+    url: parsed.finalUrl ?? url,
     strategy: strat,
     ok: true,
+    source: 'psi' as const,
     usedApiKey: Boolean(key),
-    performanceScore,
-    lab,
+    performanceScore: parsed.performanceScore,
+    lab: parsed.lab,
     field,
-    opportunities,
-    fetchedAt: lh.fetchTime ?? null,
+    opportunities: parsed.opportunities,
+    fetchedAt: parsed.fetchedAt,
     note: field ? undefined : 'No CrUX field data for this URL (not enough real-user traffic) — lab metrics only.',
   };
 }
