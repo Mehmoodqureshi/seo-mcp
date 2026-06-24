@@ -11,6 +11,8 @@ import { pageSpeed, type Strategy } from './pagespeed';
 export interface Issue {
   severity: 'error' | 'warning' | 'info';
   message: string;
+  /** Recommended approach to resolve the issue. */
+  fix?: string;
 }
 
 export interface AuditOptions {
@@ -18,6 +20,8 @@ export interface AuditOptions {
   pagespeed?: boolean;
   /** PSI strategy when `pagespeed` is enabled (default "mobile"). */
   strategy?: Strategy;
+  /** Pull the full GTmetrix-style detail layer (all categories, diagnostics, suggestions). */
+  detail?: boolean;
 }
 
 /** Full single-page on-page audit. */
@@ -25,39 +29,40 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
   const url = normalizeUrl(rawUrl);
   // Kick off the (slower) PageSpeed call concurrently with the page fetch so the
   // combined audit isn't fetch-then-PSI serialized.
-  const psiPromise = opts.pagespeed ? pageSpeed(url, opts.strategy ?? 'mobile') : null;
+  const psiPromise = opts.pagespeed ? pageSpeed(url, opts.strategy ?? 'mobile', { detail: opts.detail }) : null;
   const res = await fetchText(url);
   const issues: Issue[] = [];
 
-  if (!res.ok) issues.push({ severity: 'error', message: `HTTP ${res.status} — page did not return 200 OK` });
+  if (!res.ok)
+    issues.push({ severity: 'error', message: `HTTP ${res.status} — page did not return 200 OK`, fix: 'Return a 200 for live URLs. If the page is gone, 301-redirect it to the best replacement and remove it from the sitemap; investigate 5xx as a server/hosting problem.' });
   if (!/text\/html/i.test(res.contentType)) {
-    issues.push({ severity: 'warning', message: `Content-Type is "${res.contentType || 'unknown'}", not text/html` });
+    issues.push({ severity: 'warning', message: `Content-Type is "${res.contentType || 'unknown'}", not text/html`, fix: 'Serve HTML pages with "Content-Type: text/html; charset=UTF-8" so crawlers parse them as pages.' });
   }
 
   const $ = cheerio.load(res.body);
 
   // Title
   const title = $('head > title').first().text().trim();
-  if (!title) issues.push({ severity: 'error', message: 'Missing <title>' });
-  else if (title.length > 60) issues.push({ severity: 'warning', message: `Title is ${title.length} chars (>60 may truncate in SERPs)` });
-  else if (title.length < 30) issues.push({ severity: 'info', message: `Title is ${title.length} chars (<30 is short)` });
+  if (!title) issues.push({ severity: 'error', message: 'Missing <title>', fix: 'Add a unique, descriptive <title> (~50–60 chars) leading with the page\'s primary keyword.' });
+  else if (title.length > 60) issues.push({ severity: 'warning', message: `Title is ${title.length} chars (>60 may truncate in SERPs)`, fix: 'Trim the title to ~50–60 characters so it isn\'t cut off in search results; front-load the key term.' });
+  else if (title.length < 30) issues.push({ severity: 'info', message: `Title is ${title.length} chars (<30 is short)`, fix: 'Expand the title toward ~50–60 chars with relevant keywords/brand to use the full SERP width.' });
 
   // Meta description
   const metaDescription = $('meta[name="description"]').attr('content')?.trim() ?? '';
-  if (!metaDescription) issues.push({ severity: 'warning', message: 'Missing meta description' });
-  else if (metaDescription.length > 160) issues.push({ severity: 'warning', message: `Meta description is ${metaDescription.length} chars (>160 may truncate)` });
-  else if (metaDescription.length < 50) issues.push({ severity: 'info', message: `Meta description is ${metaDescription.length} chars (<50 is short)` });
+  if (!metaDescription) issues.push({ severity: 'warning', message: 'Missing meta description', fix: 'Add a compelling 140–160 char meta description that summarizes the page and includes the target keyword to improve click-through.' });
+  else if (metaDescription.length > 160) issues.push({ severity: 'warning', message: `Meta description is ${metaDescription.length} chars (>160 may truncate)`, fix: 'Tighten the description to ≤160 chars so it isn\'t truncated; put the most important wording first.' });
+  else if (metaDescription.length < 50) issues.push({ severity: 'info', message: `Meta description is ${metaDescription.length} chars (<50 is short)`, fix: 'Expand toward 140–160 chars with a clear value proposition and the target keyword.' });
 
   // Core head signals
   const canonical = $('link[rel="canonical"]').attr('href')?.trim() ?? null;
-  if (!canonical) issues.push({ severity: 'info', message: 'No canonical link' });
+  if (!canonical) issues.push({ severity: 'info', message: 'No canonical link', fix: 'Add <link rel="canonical"> pointing to the preferred URL to consolidate duplicates and signal the canonical version.' });
   const metaRobots = $('meta[name="robots"]').attr('content')?.trim() ?? null;
-  if (metaRobots && /noindex/i.test(metaRobots)) issues.push({ severity: 'error', message: `Page is noindex (meta robots="${metaRobots}")` });
+  if (metaRobots && /noindex/i.test(metaRobots)) issues.push({ severity: 'error', message: `Page is noindex (meta robots="${metaRobots}")`, fix: 'If this page should rank, remove the noindex directive. If it is intentionally hidden (thank-you/admin page), this is fine — ignore.' });
   const viewport = $('meta[name="viewport"]').attr('content')?.trim() ?? null;
-  if (!viewport) issues.push({ severity: 'warning', message: 'No viewport meta — not mobile-friendly' });
+  if (!viewport) issues.push({ severity: 'warning', message: 'No viewport meta — not mobile-friendly', fix: 'Add <meta name="viewport" content="width=device-width, initial-scale=1"> so the page renders responsively on mobile.' });
   const charset = $('meta[charset]').attr('charset')?.trim() ?? $('meta[http-equiv="Content-Type"]').attr('content') ?? null;
   const lang = $('html').attr('lang')?.trim() ?? null;
-  if (!lang) issues.push({ severity: 'info', message: 'No <html lang> attribute' });
+  if (!lang) issues.push({ severity: 'info', message: 'No <html lang> attribute', fix: 'Set <html lang="en"> (or the correct locale) to help search engines and assistive tech understand the language.' });
 
   // Open Graph + Twitter
   const og: Record<string, string> = {};
@@ -70,14 +75,14 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
     const k = $(el).attr('name')!;
     twitter[k] = $(el).attr('content') ?? '';
   });
-  if (Object.keys(og).length === 0) issues.push({ severity: 'info', message: 'No Open Graph tags (worse social sharing previews)' });
+  if (Object.keys(og).length === 0) issues.push({ severity: 'info', message: 'No Open Graph tags (worse social sharing previews)', fix: 'Add og:title, og:description, og:image (1200×630), og:url and og:type so shared links show a rich preview card.' });
 
   // Headings
   const h1s = $('h1').map((_, el) => $(el).text().trim()).get().filter(Boolean);
   const headingCounts: Record<string, number> = {};
   for (const tag of ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']) headingCounts[tag] = $(tag).length;
-  if (h1s.length === 0) issues.push({ severity: 'error', message: 'No <h1> on the page' });
-  else if (h1s.length > 1) issues.push({ severity: 'warning', message: `${h1s.length} <h1> tags (prefer exactly one)` });
+  if (h1s.length === 0) issues.push({ severity: 'error', message: 'No <h1> on the page', fix: 'Add exactly one <h1> that states the page\'s main topic, then use <h2>/<h3> for sub-sections in order.' });
+  else if (h1s.length > 1) issues.push({ severity: 'warning', message: `${h1s.length} <h1> tags (prefer exactly one)`, fix: 'Keep a single <h1> as the page\'s main heading; demote the others to <h2>/<h3> to form a clean outline.' });
 
   // Word count (visible body text). Clone the body and drop non-content nodes
   // first so <script>/<style>/etc. contents don't inflate the count.
@@ -85,12 +90,12 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
   $body.find('script, style, noscript, template, svg').remove();
   const bodyText = $body.text().replace(/\s+/g, ' ').trim();
   const wordCount = bodyText ? bodyText.split(' ').length : 0;
-  if (wordCount < 300) issues.push({ severity: 'info', message: `Only ~${wordCount} words (thin content)` });
+  if (wordCount < 300) issues.push({ severity: 'info', message: `Only ~${wordCount} words (thin content)`, fix: 'Expand toward 300+ words of genuinely useful, unique content covering the topic so the page can rank; avoid filler.' });
 
   // Images / alt
   const imgs = $('img');
   const imgsMissingAlt = imgs.filter((_, el) => !($(el).attr('alt') ?? '').trim()).length;
-  if (imgsMissingAlt > 0) issues.push({ severity: 'warning', message: `${imgsMissingAlt}/${imgs.length} images missing alt text` });
+  if (imgsMissingAlt > 0) issues.push({ severity: 'warning', message: `${imgsMissingAlt}/${imgs.length} images missing alt text`, fix: 'Add descriptive alt text to meaningful images (and alt="" for purely decorative ones) for accessibility and image SEO.' });
 
   // Links
   const origin = originOf(res.finalUrl);
@@ -113,12 +118,13 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
 
   // Structured data presence (count only; see extractSchema for detail)
   const jsonLdBlocks = $('script[type="application/ld+json"]').length;
-  if (jsonLdBlocks === 0) issues.push({ severity: 'info', message: 'No JSON-LD structured data' });
+  if (jsonLdBlocks === 0) issues.push({ severity: 'info', message: 'No JSON-LD structured data', fix: 'Add relevant schema.org JSON-LD (e.g. Organization, WebPage, Article, BreadcrumbList, FAQ) to qualify for rich results.' });
 
   // Optional PageSpeed (awaited here — it was started before the fetch above).
   const pagespeed = psiPromise ? await psiPromise : undefined;
-  if (pagespeed?.ok && typeof pagespeed.performanceScore === 'number' && pagespeed.performanceScore < 50) {
-    issues.push({ severity: 'warning', message: `Low PageSpeed performance score: ${pagespeed.performanceScore}/100 (${pagespeed.strategy})` });
+  const perfScore = (pagespeed as { performanceScore?: number } | undefined)?.performanceScore;
+  if (pagespeed?.ok && typeof perfScore === 'number' && perfScore < 50) {
+    issues.push({ severity: 'warning', message: `Low PageSpeed performance score: ${perfScore}/100 (${pagespeed.strategy})`, fix: 'Tackle the top PageSpeed opportunities: defer/trim unused JavaScript, preload the LCP image (don\'t lazy-load it), serve WebP/AVIF, and improve server response/caching.' });
   }
 
   return {

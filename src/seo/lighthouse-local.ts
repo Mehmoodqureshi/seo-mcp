@@ -13,7 +13,7 @@
  * compile target doesn't downlevel it to require() (lighthouse is ESM-only).
  */
 import { normalizeUrl } from './http';
-import { parseLighthouse, type Strategy } from './pagespeed';
+import { parseLighthouse, parseLighthouseDetail, type Strategy } from './pagespeed';
 
 // Real ESM dynamic import that survives tsc's CommonJS downleveling.
 const esmImport = new Function('specifier', 'return import(specifier)') as (s: string) => Promise<any>;
@@ -35,7 +35,7 @@ function missingDepHint(err: unknown): string {
  * the PDF renderer and audit_page need no changes. `field` is always null.
  * Never throws — surfaces failures as `{ ok: false, error, ... }`.
  */
-export async function pageSpeedLocal(rawUrl: string, strategy: Strategy = 'mobile') {
+export async function pageSpeedLocal(rawUrl: string, strategy: Strategy = 'mobile', opts: { detail?: boolean } = {}) {
   const url = normalizeUrl(rawUrl);
   const strat: Strategy = strategy === 'desktop' ? 'desktop' : 'mobile';
 
@@ -47,7 +47,9 @@ export async function pageSpeedLocal(rawUrl: string, strategy: Strategy = 'mobil
 
     chrome = await launch({ chromeFlags: ['--headless=new', '--no-sandbox', '--disable-gpu'] });
 
-    const flags = { port: chrome.port, onlyCategories: ['performance'], output: 'json' as const };
+    // Detailed runs score all four categories; otherwise just Performance (faster).
+    const onlyCategories = opts.detail ? ['performance', 'accessibility', 'best-practices', 'seo'] : ['performance'];
+    const flags = { port: chrome.port, onlyCategories, output: 'json' as const };
     // Lighthouse's default config is mobile (Moto-G4 + 4G throttling). For desktop
     // we hand it the bundled desktop preset so metrics match PSI's desktop strategy.
     let config: any;
@@ -73,6 +75,7 @@ export async function pageSpeedLocal(rawUrl: string, strategy: Strategy = 'mobil
       lab: parsed.lab,
       field: null,
       opportunities: parsed.opportunities,
+      ...(opts.detail ? { detail: parseLighthouseDetail(lhr) } : {}),
       fetchedAt: parsed.fetchedAt,
       note: 'Lab metrics from local Lighthouse — no CrUX field data, and scores vary with this host’s CPU/network (not standardized like PSI).',
     };

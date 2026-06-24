@@ -101,15 +101,191 @@ export function parseLighthouse(lh: Record<string, any>): LighthouseLab {
   };
 }
 
+// ── Detailed (GTmetrix-style) extraction ──────────────────────────────────────
+
+/** One Lighthouse category (Performance / Accessibility / Best Practices / SEO). */
+export interface CategoryScore {
+  id: string;
+  title: string;
+  score: number | null;
+}
+
+/** A labeled diagnostic value (server response, DOM size, page weight, …). */
+export interface Diagnostic {
+  label: string;
+  value: string;
+}
+
+/** A resource-weight row from Lighthouse's resource summary. */
+export interface ResourceRow {
+  type: string;
+  requests: number;
+  bytes: number;
+  display: string;
+}
+
+/** A scored Lighthouse audit, surfaced either as a suggestion or a passed check. */
+export interface AuditFinding {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  score: number | null;
+  displayValue: string | null;
+}
+
+/** The full GTmetrix-style detail layer extracted from a Lighthouse result. */
+export interface LighthouseDetail {
+  categories: CategoryScore[];
+  diagnostics: Diagnostic[];
+  resources: ResourceRow[];
+  suggestions: AuditFinding[];
+  passed: AuditFinding[];
+  passedCount: number;
+}
+
+const CATEGORY_TITLES: Record<string, string> = {
+  performance: 'Performance',
+  accessibility: 'Accessibility',
+  'best-practices': 'Best Practices',
+  seo: 'SEO',
+};
+
+/** Lighthouse "metric" audits — shown separately as CWV, excluded from findings. */
+const METRIC_IDS = new Set([
+  'first-contentful-paint',
+  'largest-contentful-paint',
+  'cumulative-layout-shift',
+  'total-blocking-time',
+  'speed-index',
+  'interactive',
+  'max-potential-fid',
+  'first-meaningful-paint',
+]);
+
+/** Turn Lighthouse's markdown-flavored copy into clean plain text for reports. */
+function stripMarkdown(s: string): string {
+  return (s || '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [text](url) → text
+    .replace(/`([^`]+)`/g, '$1') // `code` → code
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  if (n < 1024) return `${Math.round(n)} B`;
+  const kb = n / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  return `${(kb / 1024).toFixed(2)} MB`;
+}
+
+/**
+ * Extract the full detail layer (all category scores, diagnostics, resource
+ * weight, and per-audit suggestions vs passed checks) from a Lighthouse result.
+ * Present only when the run requested all categories; missing pieces degrade
+ * gracefully to empty arrays.
+ */
+export function parseLighthouseDetail(lh: Record<string, any>): LighthouseDetail {
+  const audits: Record<string, any> = lh.audits ?? {};
+  const cats: Record<string, any> = lh.categories ?? {};
+
+  // Category scores (0–100), in a stable, human order.
+  const categories: CategoryScore[] = Object.keys(CATEGORY_TITLES)
+    .filter((id) => cats[id])
+    .map((id) => ({
+      id,
+      title: cats[id].title ?? CATEGORY_TITLES[id],
+      score: typeof cats[id].score === 'number' ? Math.round(cats[id].score * 100) : null,
+    }));
+
+  // Map each audit → the (first) category that references it, for grouping.
+  const auditCategory: Record<string, string> = {};
+  for (const id of Object.keys(cats)) {
+    const title = CATEGORY_TITLES[id] ?? cats[id].title ?? id;
+    for (const ref of cats[id].auditRefs ?? []) {
+      if (ref?.id && !auditCategory[ref.id]) auditCategory[ref.id] = title;
+    }
+  }
+
+  // Diagnostics — the "page details" GTmetrix shows.
+  const numeric = (id: string): number | null => (typeof audits[id]?.numericValue === 'number' ? audits[id].numericValue : null);
+  const diagnostics: Diagnostic[] = [];
+  const addDiag = (label: string, value: string | null): void => {
+    if (value && value !== '—') diagnostics.push({ label, value });
+  };
+  addDiag('Server response time', audits['server-response-time']?.displayValue ?? null);
+  addDiag('Main-thread work', audits['mainthread-work-breakdown']?.displayValue ?? null);
+  addDiag('JS execution time', audits['bootup-time']?.displayValue ?? null);
+  const dom = numeric('dom-size');
+  addDiag('DOM elements', dom == null ? null : Math.round(dom).toLocaleString('en-US'));
+  const totalBytes = numeric('total-byte-weight');
+  addDiag('Total page size', totalBytes == null ? null : formatBytes(totalBytes));
+  const reqItems = audits['network-requests']?.details?.items;
+  addDiag('Network requests', Array.isArray(reqItems) ? String(reqItems.length) : null);
+
+  // Resource weight breakdown (Script / Image / CSS / Font / …).
+  const resources: ResourceRow[] = [];
+  const rs = audits['resource-summary']?.details?.items;
+  if (Array.isArray(rs)) {
+    for (const it of rs) {
+      const bytes = typeof it.transferSize === 'number' ? it.transferSize : 0;
+      resources.push({
+        type: String(it.label ?? it.resourceType ?? '—'),
+        requests: typeof it.requestCount === 'number' ? it.requestCount : 0,
+        bytes,
+        display: formatBytes(bytes),
+      });
+    }
+  }
+
+  // Suggestions (failing/weak audits) vs passed checks (best practices followed).
+  const suggestions: AuditFinding[] = [];
+  const passed: AuditFinding[] = [];
+  for (const id of Object.keys(audits)) {
+    const a = audits[id];
+    if (METRIC_IDS.has(id)) continue;
+    const mode = a?.scoreDisplayMode;
+    if (mode !== 'binary' && mode !== 'numeric' && mode !== 'metricSavings') continue;
+    if (typeof a.score !== 'number') continue;
+    const finding: AuditFinding = {
+      id,
+      title: a.title ?? id,
+      description: stripMarkdown(a.description ?? ''),
+      category: auditCategory[id] ?? 'Other',
+      score: Math.round(a.score * 100),
+      displayValue: typeof a.displayValue === 'string' ? stripMarkdown(a.displayValue) : null,
+    };
+    if (a.score >= 0.9) passed.push(finding);
+    else suggestions.push(finding);
+  }
+
+  // Worst (and most impactful) first.
+  suggestions.sort((x, y) => (x.score ?? 0) - (y.score ?? 0));
+
+  return {
+    categories,
+    diagnostics,
+    resources,
+    suggestions: suggestions.slice(0, 20),
+    passed: passed.slice(0, 40),
+    passedCount: passed.length,
+  };
+}
+
 /**
  * Run PageSpeed Insights for a URL.
  * Never throws on a PSI error response — surfaces it in the result instead.
  */
-export async function pageSpeed(rawUrl: string, strategy: Strategy = 'mobile') {
+export async function pageSpeed(rawUrl: string, strategy: Strategy = 'mobile', opts: { detail?: boolean } = {}) {
   const url = normalizeUrl(rawUrl);
   const strat: Strategy = strategy === 'desktop' ? 'desktop' : 'mobile';
 
-  const params = new URLSearchParams({ url, strategy: strat, category: 'performance' });
+  const params = new URLSearchParams({ url, strategy: strat });
+  // PSI accepts repeated `category` params. For a detailed report we ask for all
+  // four (Performance + Accessibility + Best Practices + SEO); otherwise just perf.
+  const categories = opts.detail ? ['performance', 'accessibility', 'best-practices', 'seo'] : ['performance'];
+  for (const c of categories) params.append('category', c);
   const key = apiKey();
   if (key) params.set('key', key);
 
@@ -168,6 +344,7 @@ export async function pageSpeed(rawUrl: string, strategy: Strategy = 'mobile') {
     lab: parsed.lab,
     field,
     opportunities: parsed.opportunities,
+    ...(opts.detail ? { detail: parseLighthouseDetail(lh) } : {}),
     fetchedAt: parsed.fetchedAt,
     note: field ? undefined : 'No CrUX field data for this URL (not enough real-user traffic) — lab metrics only.',
   };
