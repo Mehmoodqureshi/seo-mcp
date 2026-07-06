@@ -1,7 +1,7 @@
 /**
  * src/seo/http.ts — small fetch helpers shared by the SEO tools.
  *
- * Node 18+ ships a global `fetch`; we add a sane User-Agent, a timeout, and
+ * Node ships a global `fetch`; we add a sane User-Agent, a timeout, and
  * redirect tracking so audits report the FINAL url.
  */
 

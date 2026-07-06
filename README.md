@@ -59,7 +59,7 @@ npm run build       # → dist/
 npm test            # node:test suite (no network — fetch is stubbed)
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck → build → test on Node 18/20/22.
+CI (`.github/workflows/ci.yml`) runs typecheck → build → test on Node 20/22. Node 20+ is required (cheerio 1.x depends on undici, which needs the global `File` added in Node 20).
 
 ### Performance & output size
 
