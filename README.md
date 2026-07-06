@@ -1,6 +1,8 @@
 # seo-mcp
 
 [![CI](https://github.com/Mehmoodqureshi/seo-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Mehmoodqureshi/seo-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/%40mehmoodqureshi%2Fseo-mcp?label=npm)](https://www.npmjs.com/package/@mehmoodqureshi/seo-mcp)
+[![license](https://img.shields.io/npm/l/%40mehmoodqureshi%2Fseo-mcp?label=license)](LICENSE)
 
 An **SEO MCP server** — a stdio [Model Context Protocol](https://modelcontextprotocol.io) server that gives an AI host a set of SEO tools. The MVP is **100% free and keyless**: on-page/technical audits, robots.txt, sitemaps, structured data, broken-link checks, and keyword ideas.
 
