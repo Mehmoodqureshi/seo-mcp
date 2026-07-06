@@ -35,8 +35,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "clean": "rimraf dist",
     "start": "node dist/src/cli.js",
+    "test": "rimraf dist && tsc -p tsconfig.test.json && node --test dist/test",
     "prepack": "npm run clean && npm run build"
   },
   "dependencies": {

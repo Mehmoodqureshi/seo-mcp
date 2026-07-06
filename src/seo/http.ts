@@ -18,8 +18,56 @@ export interface FetchResult {
   elapsedMs: number;
 }
 
+// --- Request cache + in-flight coalescing ---------------------------------
+// A short-TTL cache dedupes identical GETs within a run — e.g. an `audit_page`
+// immediately followed by `export_audit_pdf` for the same URL, or a sitemap /
+// robots.txt referenced by more than one tool during a crawl — while the short
+// default window avoids serving stale content across a user's edit-then-recheck
+// loop. In-flight coalescing collapses concurrent identical requests (common
+// under the site crawler's bounded concurrency) into a single network call.
+// Tune with SEO_MCP_CACHE_TTL_MS (milliseconds; default 15000). Set 0 to disable.
+const CACHE_TTL_MS = (() => {
+  const raw = process.env.SEO_MCP_CACHE_TTL_MS;
+  const n = raw == null ? NaN : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 15000;
+})();
+
+interface CacheEntry {
+  expires: number;
+  result: FetchResult;
+}
+const responseCache = new Map<string, CacheEntry>();
+const inFlight = new Map<string, Promise<FetchResult>>();
+
+/** Clear the request cache and any in-flight coalescing state (used by tests). */
+export function clearHttpCache(): void {
+  responseCache.clear();
+  inFlight.clear();
+}
+
 /** Fetch a URL as text with a timeout. Never throws on HTTP status; throws only on network/timeout. */
 export async function fetchText(url: string, timeoutMs = 15000): Promise<FetchResult> {
+  if (CACHE_TTL_MS <= 0) return doFetchText(url, timeoutMs);
+
+  const key = `${timeoutMs}:${url}`;
+  const hit = responseCache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.result;
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+
+  const run = doFetchText(url, timeoutMs);
+  inFlight.set(key, run);
+  run.then(
+    (result) => responseCache.set(key, { expires: Date.now() + CACHE_TTL_MS, result }),
+    () => {
+      /* never cache network/timeout failures — let the next call retry */
+    },
+  ).finally(() => inFlight.delete(key));
+  return run;
+}
+
+/** The uncached fetch: adds a sane User-Agent, a timeout, and redirect tracking. */
+async function doFetchText(url: string, timeoutMs: number): Promise<FetchResult> {
   const started = Date.now();
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);

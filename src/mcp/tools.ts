@@ -19,6 +19,7 @@ import {
 import { pageSpeed } from '../seo/pagespeed';
 import { pageSpeedLocal } from '../seo/lighthouse-local';
 import { auditSite } from '../seo/site';
+import { compactSiteAudit } from '../seo/compact';
 import { renderAuditPdf, renderSiteAuditPdf } from '../seo/pdf';
 
 type JsonSchema = { type: 'object'; properties: Record<string, unknown>; required: string[] };
@@ -67,11 +68,12 @@ export const TOOL_DEFINITIONS: ToolDef[] = [
   {
     name: 'audit_site',
     description:
-      'Site-wide on-page SEO audit: discovers the site\'s URLs from its sitemap (resolving a sitemap index into child sitemaps), runs the on-page audit on each page (keyless, concurrency-limited), and returns site-level aggregates — average/min/max score, pages with errors, site-wide gaps (missing titles/meta/H1/schema), a rollup of the most common issues, and a per-page table. PageSpeed is NOT run per page (too slow across many URLs). Use audit_page or pagespeed for deep per-page performance.',
+      'Site-wide on-page SEO audit: discovers the site\'s URLs from its sitemap (resolving a sitemap index into child sitemaps), runs the on-page audit on each page (keyless, concurrency-limited), and returns site-level aggregates — average/min/max score, pages with errors, site-wide gaps (missing titles/meta/H1/schema), a rollup of the most common issues, and a per-page table. By DEFAULT the response is compact: per-page rows carry score and issue counts only (sorted worst-first) to keep the payload small; set detail=true to get full per-page metadata and each page\'s specific issues. PageSpeed is NOT run per page (too slow across many URLs). Use audit_page or pagespeed for deep per-page performance, or export_site_pdf for a formatted report.',
     inputSchema: obj(
       {
         url: { type: 'string', description: 'Any URL on the site (https:// optional)' },
         max: { type: 'number', description: 'Maximum number of pages to audit (default 50)' },
+        detail: { type: 'boolean', description: 'Return the full per-page breakdown (metadata, headings, and each page\'s issue list) instead of the compact score/counts table. Default false — keep it off unless the full detail is needed, as it is far larger.' },
       },
       ['url'],
     ),
@@ -207,7 +209,10 @@ export const TOOL_HANDLERS: Record<string, (a: Args) => Promise<ToolResult>> = {
     const strategies = reports.map((r) => r?.strategy).filter(Boolean).join(' + ');
     return jsonResult({ ok: true, path, url: audit.url, score: audit.score, issues: audit.issues.length, strategies: strategies || 'none', message: `PDF report written to ${path}` });
   },
-  audit_site: async (a) => jsonResult(await auditSite(str(a, 'url'), { max: typeof a.max === 'number' ? a.max : 50 })),
+  audit_site: async (a) => {
+    const site = await auditSite(str(a, 'url'), { max: typeof a.max === 'number' ? a.max : 50 });
+    return jsonResult(a.detail === true ? site : compactSiteAudit(site));
+  },
   export_site_pdf: async (a) => {
     const site = await auditSite(str(a, 'url'), { max: typeof a.max === 'number' ? a.max : 50 });
     const path = await renderSiteAuditPdf(site, typeof a.path === 'string' ? a.path : undefined, { perPageDetails: a.details !== false });

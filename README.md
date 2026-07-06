@@ -56,9 +56,15 @@ node -e "require('./dist/src/seo/audit').auditPage('https://example.com').then(r
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run build       # → dist/
+npm test            # node:test suite (no network — fetch is stubbed)
 ```
 
-CI (`.github/workflows/ci.yml`) runs typecheck → build on Node 18/20/22.
+CI (`.github/workflows/ci.yml`) runs typecheck → build → test on Node 18/20/22.
+
+### Performance & output size
+
+- **Request caching** — identical GETs are de-duplicated by a short-TTL cache with in-flight coalescing, so a `audit_page` → `export_audit_pdf` pair (or a sitemap/robots.txt referenced during a crawl) hits the network once. Tune with `SEO_MCP_CACHE_TTL_MS` (milliseconds, default `15000`); set `0` to disable.
+- **Compact `audit_site`** — by default the site audit returns a slim, worst-first per-page table (score + issue counts) plus the aggregates, to keep the response small inside an MCP host's context. Pass `detail: true` for the full per-page breakdown, or use `export_site_pdf` for a formatted report.
 
 ## PageSpeed (optional key)
 
