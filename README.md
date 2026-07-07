@@ -43,6 +43,22 @@ Add to your MCP host config (e.g. a project `.mcp.json`):
 }
 ```
 
+If the package is installed (globally or via `npx`), use the published `seo-mcp` bin instead of a `node` + path — no build step or absolute path needed:
+
+```json
+{
+  "mcpServers": {
+    "seo-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@mehmoodqureshi/seo-mcp"]
+    }
+  }
+}
+```
+
+Or, after `npm install -g @mehmoodqureshi/seo-mcp`, set `"command": "seo-mcp"` with no args.
+
 Then ask things like *"audit https://example.com for SEO"* or *"what does example.com's robots.txt block?"*.
 
 ## Quick smoke test (no MCP host needed)
