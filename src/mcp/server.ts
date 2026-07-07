@@ -1,18 +1,18 @@
 /**
  * src/mcp/server.ts — MCP server bootstrap over stdio.
  *
- * Wires the SDK `Server` to a `StdioServerTransport` so an MCP host
+ * Wires the SDK `McpServer` to a `StdioServerTransport` so an MCP host
  * drives seo-mcp over JSON-RPC on stdin/stdout. CRITICAL: in stdio mode nothing
  * may be written to stdout except the JSON-RPC stream — all diagnostics go to
  * stderr via `logErr`.
  */
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerTools } from './tools';
 
 const SERVER_NAME = 'seo-mcp';
 
-let server: Server | null = null;
+let server: McpServer | null = null;
 let transport: StdioServerTransport | null = null;
 
 /** stderr only — never stdout in stdio mode. */
@@ -20,11 +20,11 @@ export function logErr(message: string): void {
   process.stderr.write(`[seo-mcp] ${message}\n`);
 }
 
-/** Build a fresh `Server` with the full tool surface registered (no transport). */
-export function createServer(version: string): Server {
-  const srv = new Server({ name: SERVER_NAME, version }, { capabilities: { tools: {} } });
+/** Build a fresh `McpServer` with the full tool surface registered (no transport). */
+export function createServer(version: string): McpServer {
+  const srv = new McpServer({ name: SERVER_NAME, version }, { capabilities: { tools: {} } });
   registerTools(srv);
-  srv.onerror = (err: unknown) => {
+  srv.server.onerror = (err: unknown) => {
     logErr(`server error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
   };
   return srv;

@@ -1,13 +1,13 @@
 /**
  * src/mcp/tools.ts — the SEO tool surface.
  *
- * `TOOL_DEFINITIONS` advertises each tool's JSON-schema; `TOOL_HANDLERS` maps
- * names to handlers. `dispatchToolCall` is a never-throw firewall that turns any
- * Error into an `isError` text result. `registerTools()` wires both onto the SDK
- * `Server` via the ListTools / CallTool request handlers.
+ * `TOOL_HANDLERS` maps names to handlers. `dispatchToolCall` is a never-throw
+ * firewall that turns any Error into an `isError` text result. `registerTools()`
+ * registers each tool on the `McpServer` via `registerTool`, with a zod input
+ * schema the SDK validates before the handler runs.
  */
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import {
   auditPage,
   checkRobots,
@@ -21,123 +21,6 @@ import { pageSpeedLocal } from '../seo/lighthouse-local';
 import { auditSite } from '../seo/site';
 import { compactSiteAudit } from '../seo/compact';
 import { renderAuditPdf, renderSiteAuditPdf } from '../seo/pdf';
-
-type JsonSchema = { type: 'object'; properties: Record<string, unknown>; required: string[] };
-const obj = (properties: Record<string, unknown>, required: string[] = []): JsonSchema => ({
-  type: 'object',
-  properties,
-  required,
-});
-
-interface ToolDef {
-  name: string;
-  description: string;
-  inputSchema: JsonSchema;
-}
-
-export const TOOL_DEFINITIONS: ToolDef[] = [
-  {
-    name: 'audit_page',
-    description:
-      'Full on-page SEO audit of a URL: title, meta description, canonical, robots, viewport, Open Graph/Twitter, heading outline, word count, image alt coverage, internal/external link counts, structured-data presence, plus a list of issues and a 0–100 score. Free, no API key. Set pagespeed=true to also attach PageSpeed Insights performance metrics. After presenting the results, ASK THE USER whether they want a professionally formatted PDF report; if they say yes, call export_audit_pdf with the same url (and same pagespeed/strategy).',
-    inputSchema: obj(
-      {
-        url: { type: 'string', description: 'Page URL (https:// optional)' },
-        pagespeed: { type: 'boolean', description: 'Also run PageSpeed Insights and attach performance metrics (default false)' },
-        strategy: { type: 'string', description: 'PageSpeed strategy when pagespeed=true: "mobile" (default) or "desktop"' },
-        detail: { type: 'boolean', description: 'When pagespeed=true, also attach the full GTmetrix-style detail layer under pagespeed.detail (all category scores, diagnostics, resource breakdown, suggestions, passed checks). Default false.' },
-      },
-      ['url'],
-    ),
-  },
-  {
-    name: 'export_audit_pdf',
-    description:
-      'Generate a professionally laid-out PDF report of an on-page SEO audit (score badge, summary cards, severity-colored issue list, metadata, content/structure, social tags, and optional PageSpeed metrics). Re-runs the audit for the URL and writes a .pdf to disk, returning the file path. Use this after audit_page when the user asks for a PDF report.',
-    inputSchema: obj(
-      {
-        url: { type: 'string', description: 'Page URL to audit and export (https:// optional)' },
-        path: { type: 'string', description: 'Output file path (default: ./seo-audit-<host>-<date>.pdf in the current directory). ".pdf" is appended if missing.' },
-        pagespeed: { type: 'boolean', description: 'Also run PageSpeed and include performance metrics in the report (default false). When true, BOTH Mobile and Desktop are included in the same PDF unless a single "strategy" is specified.' },
-        strategy: { type: 'string', description: 'Limit the PageSpeed section to one strategy: "mobile" or "desktop". Omit to include BOTH in the same file (default).' },
-        detail: { type: 'boolean', description: 'Include the full GTmetrix-style detail in the PDF (category scores, diagnostics, resource weight, prioritized suggestions, passed checks). Defaults to true when pagespeed=true.' },
-      },
-      ['url'],
-    ),
-  },
-  {
-    name: 'audit_site',
-    description:
-      'Site-wide on-page SEO audit: discovers the site\'s URLs from its sitemap (resolving a sitemap index into child sitemaps), runs the on-page audit on each page (keyless, concurrency-limited), and returns site-level aggregates — average/min/max score, pages with errors, site-wide gaps (missing titles/meta/H1/schema), a rollup of the most common issues, and a per-page table. By DEFAULT the response is compact: per-page rows carry score and issue counts only (sorted worst-first) to keep the payload small; set detail=true to get full per-page metadata and each page\'s specific issues. PageSpeed is NOT run per page (too slow across many URLs). Use audit_page or pagespeed for deep per-page performance, or export_site_pdf for a formatted report.',
-    inputSchema: obj(
-      {
-        url: { type: 'string', description: 'Any URL on the site (https:// optional)' },
-        max: { type: 'number', description: 'Maximum number of pages to audit (default 50)' },
-        detail: { type: 'boolean', description: 'Return the full per-page breakdown (metadata, headings, and each page\'s issue list) instead of the compact score/counts table. Default false — keep it off unless the full detail is needed, as it is far larger.' },
-      },
-      ['url'],
-    ),
-  },
-  {
-    name: 'export_site_pdf',
-    description:
-      'Run a site-wide audit and write a professionally formatted multi-page PDF report (overall average-score badge, summary cards, coverage, common-issues rollup, a per-page results table sorted worst-first, and a full per-page details section — metadata, structure, and each page\'s specific issues). Returns the file path.',
-    inputSchema: obj(
-      {
-        url: { type: 'string', description: 'Any URL on the site (https:// optional)' },
-        max: { type: 'number', description: 'Maximum number of pages to audit (default 50)' },
-        path: { type: 'string', description: 'Output file path (default: ./seo-site-audit-<host>-<date>.pdf). ".pdf" appended if missing.' },
-        details: { type: 'boolean', description: 'Include the full per-page details section (one card per page with metadata, structure, and issues). Default true; set false for a summary-only report.' },
-      },
-      ['url'],
-    ),
-  },
-  {
-    name: 'check_robots',
-    description: "Fetch and parse a site's /robots.txt — user-agent groups, allow/disallow rules, and declared sitemaps.",
-    inputSchema: obj({ url: { type: 'string', description: 'Any URL on the site' } }, ['url']),
-  },
-  {
-    name: 'check_sitemap',
-    description: 'Discover and summarize a sitemap (via /sitemap.xml or robots.txt): index vs urlset, URL count, and a sample of URLs.',
-    inputSchema: obj({ url: { type: 'string', description: 'Any URL on the site' } }, ['url']),
-  },
-  {
-    name: 'extract_schema',
-    description: 'Extract JSON-LD structured data from a page and list the schema.org @types found (plus any microdata itemtypes and JSON-LD parse errors).',
-    inputSchema: obj({ url: { type: 'string', description: 'Page URL' } }, ['url']),
-  },
-  {
-    name: 'find_broken_links',
-    description: 'Check the links on a page with HEAD requests and report any that return 4xx/5xx or are unreachable.',
-    inputSchema: obj(
-      { url: { type: 'string', description: 'Page URL' }, max: { type: 'number', description: 'Max links to check (default 50)' } },
-      ['url'],
-    ),
-  },
-  {
-    name: 'keyword_ideas',
-    description: 'Get related keyword/query ideas for a seed term via Google Suggest (free; related queries only, no search volume).',
-    inputSchema: obj(
-      { seed: { type: 'string', description: 'Seed keyword or phrase' }, lang: { type: 'string', description: 'Language code, e.g. "en" (default)' } },
-      ['seed'],
-    ),
-  },
-  {
-    name: 'pagespeed',
-    description:
-      'Run Lighthouse for performance score (0–100), lab Core Web Vitals (LCP, CLS, TBT, FCP, Speed Index, TTI), and top improvement opportunities. Default engine is Google PageSpeed Insights (hosted; adds real-user CrUX field data when available; keyless but rate-limited — set PAGESPEED_API_KEY to raise the quota), and it auto-falls-back to a LOCAL Lighthouse run if PSI is over quota. Set local=true to force the local engine (no key, no quota; needs Chrome on the host; no CrUX field data; runs headless Chrome silently).',
-    inputSchema: obj(
-      {
-        url: { type: 'string', description: 'Page URL' },
-        strategy: { type: 'string', description: '"mobile" (default) or "desktop"' },
-        local: { type: 'boolean', description: 'Force the local Lighthouse engine instead of Google PSI (no API key/quota; requires Chrome installed; lab metrics only). Default false.' },
-        detail: { type: 'boolean', description: 'Return the full GTmetrix-style detail: all four category scores (Performance, Accessibility, Best Practices, SEO), diagnostics (server response, DOM size, page weight, request count), resource breakdown, prioritized suggestions with descriptions, and passed best-practice checks. Default false.' },
-      },
-      ['url'],
-    ),
-  },
-];
 
 type Args = Record<string, unknown>;
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
@@ -241,18 +124,136 @@ export async function dispatchToolCall(name: string, rawArgs: unknown): Promise<
   }
 }
 
-/** Assert the catalog and the dispatch table describe the same tool set. */
-function assertNoDrift(): void {
-  const defs = new Set(TOOL_DEFINITIONS.map((d) => d.name));
-  const handlers = new Set(Object.keys(TOOL_HANDLERS));
-  for (const n of defs) if (!handlers.has(n)) throw new Error(`tool "${n}" is advertised but has no handler`);
-  for (const n of handlers) if (!defs.has(n)) throw new Error(`handler "${n}" has no advertised definition`);
-}
+export function registerTools(server: McpServer): void {
+  server.registerTool(
+    'audit_page',
+    {
+      description:
+        'Full on-page SEO audit of a URL: title, meta description, canonical, robots, viewport, Open Graph/Twitter, heading outline, word count, image alt coverage, internal/external link counts, structured-data presence, plus a list of issues and a 0–100 score. Free, no API key. Set pagespeed=true to also attach PageSpeed Insights performance metrics. After presenting the results, ASK THE USER whether they want a professionally formatted PDF report; if they say yes, call export_audit_pdf with the same url (and same pagespeed/strategy).',
+      inputSchema: {
+        url: z.string().describe('Page URL (https:// optional)'),
+        pagespeed: z.boolean().describe('Also run PageSpeed Insights and attach performance metrics (default false)').optional(),
+        strategy: z.enum(['mobile', 'desktop']).describe('PageSpeed strategy when pagespeed=true: "mobile" (default) or "desktop"').optional(),
+        detail: z.boolean().describe('When pagespeed=true, also attach the full GTmetrix-style detail layer under pagespeed.detail (all category scores, diagnostics, resource breakdown, suggestions, passed checks). Default false.').optional(),
+      },
+    },
+    async (args) => dispatchToolCall('audit_page', args),
+  );
 
-export function registerTools(server: Server): void {
-  assertNoDrift();
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: TOOL_DEFINITIONS.map((d) => ({ name: d.name, description: d.description, inputSchema: d.inputSchema })),
-  }));
-  server.setRequestHandler(CallToolRequestSchema, async (req) => dispatchToolCall(req.params.name, req.params.arguments));
+  server.registerTool(
+    'export_audit_pdf',
+    {
+      description:
+        'Generate a professionally laid-out PDF report of an on-page SEO audit (score badge, summary cards, severity-colored issue list, metadata, content/structure, social tags, and optional PageSpeed metrics). Re-runs the audit for the URL and writes a .pdf to disk, returning the file path. Use this after audit_page when the user asks for a PDF report.',
+      inputSchema: {
+        url: z.string().describe('Page URL to audit and export (https:// optional)'),
+        path: z.string().describe('Output file path (default: ./seo-audit-<host>-<date>.pdf in the current directory). ".pdf" is appended if missing.').optional(),
+        pagespeed: z.boolean().describe('Also run PageSpeed and include performance metrics in the report (default false). When true, BOTH Mobile and Desktop are included in the same PDF unless a single "strategy" is specified.').optional(),
+        strategy: z.enum(['mobile', 'desktop']).describe('Limit the PageSpeed section to one strategy: "mobile" or "desktop". Omit to include BOTH in the same file (default).').optional(),
+        detail: z.boolean().describe('Include the full GTmetrix-style detail in the PDF (category scores, diagnostics, resource weight, prioritized suggestions, passed checks). Defaults to true when pagespeed=true.').optional(),
+      },
+    },
+    async (args) => dispatchToolCall('export_audit_pdf', args),
+  );
+
+  server.registerTool(
+    'audit_site',
+    {
+      description:
+        'Site-wide on-page SEO audit: discovers the site\'s URLs from its sitemap (resolving a sitemap index into child sitemaps), runs the on-page audit on each page (keyless, concurrency-limited), and returns site-level aggregates — average/min/max score, pages with errors, site-wide gaps (missing titles/meta/H1/schema), a rollup of the most common issues, and a per-page table. By DEFAULT the response is compact: per-page rows carry score and issue counts only (sorted worst-first) to keep the payload small; set detail=true to get full per-page metadata and each page\'s specific issues. PageSpeed is NOT run per page (too slow across many URLs). Use audit_page or pagespeed for deep per-page performance, or export_site_pdf for a formatted report.',
+      inputSchema: {
+        url: z.string().describe('Any URL on the site (https:// optional)'),
+        max: z.number().describe('Maximum number of pages to audit (default 50)').optional(),
+        detail: z.boolean().describe('Return the full per-page breakdown (metadata, headings, and each page\'s issue list) instead of the compact score/counts table. Default false — keep it off unless the full detail is needed, as it is far larger.').optional(),
+      },
+    },
+    async (args) => dispatchToolCall('audit_site', args),
+  );
+
+  server.registerTool(
+    'export_site_pdf',
+    {
+      description:
+        'Run a site-wide audit and write a professionally formatted multi-page PDF report (overall average-score badge, summary cards, coverage, common-issues rollup, a per-page results table sorted worst-first, and a full per-page details section — metadata, structure, and each page\'s specific issues). Returns the file path.',
+      inputSchema: {
+        url: z.string().describe('Any URL on the site (https:// optional)'),
+        max: z.number().describe('Maximum number of pages to audit (default 50)').optional(),
+        path: z.string().describe('Output file path (default: ./seo-site-audit-<host>-<date>.pdf). ".pdf" appended if missing.').optional(),
+        details: z.boolean().describe('Include the full per-page details section (one card per page with metadata, structure, and issues). Default true; set false for a summary-only report.').optional(),
+      },
+    },
+    async (args) => dispatchToolCall('export_site_pdf', args),
+  );
+
+  server.registerTool(
+    'check_robots',
+    {
+      description: "Fetch and parse a site's /robots.txt — user-agent groups, allow/disallow rules, and declared sitemaps.",
+      inputSchema: {
+        url: z.string().describe('Any URL on the site'),
+      },
+    },
+    async (args) => dispatchToolCall('check_robots', args),
+  );
+
+  server.registerTool(
+    'check_sitemap',
+    {
+      description: 'Discover and summarize a sitemap (via /sitemap.xml or robots.txt): index vs urlset, URL count, and a sample of URLs.',
+      inputSchema: {
+        url: z.string().describe('Any URL on the site'),
+      },
+    },
+    async (args) => dispatchToolCall('check_sitemap', args),
+  );
+
+  server.registerTool(
+    'extract_schema',
+    {
+      description: 'Extract JSON-LD structured data from a page and list the schema.org @types found (plus any microdata itemtypes and JSON-LD parse errors).',
+      inputSchema: {
+        url: z.string().describe('Page URL'),
+      },
+    },
+    async (args) => dispatchToolCall('extract_schema', args),
+  );
+
+  server.registerTool(
+    'find_broken_links',
+    {
+      description: 'Check the links on a page with HEAD requests and report any that return 4xx/5xx or are unreachable.',
+      inputSchema: {
+        url: z.string().describe('Page URL'),
+        max: z.number().describe('Max links to check (default 50)').optional(),
+      },
+    },
+    async (args) => dispatchToolCall('find_broken_links', args),
+  );
+
+  server.registerTool(
+    'keyword_ideas',
+    {
+      description: 'Get related keyword/query ideas for a seed term via Google Suggest (free; related queries only, no search volume).',
+      inputSchema: {
+        seed: z.string().describe('Seed keyword or phrase'),
+        lang: z.string().describe('Language code, e.g. "en" (default)').optional(),
+      },
+    },
+    async (args) => dispatchToolCall('keyword_ideas', args),
+  );
+
+  server.registerTool(
+    'pagespeed',
+    {
+      description:
+        'Run Lighthouse for performance score (0–100), lab Core Web Vitals (LCP, CLS, TBT, FCP, Speed Index, TTI), and top improvement opportunities. Default engine is Google PageSpeed Insights (hosted; adds real-user CrUX field data when available; keyless but rate-limited — set PAGESPEED_API_KEY to raise the quota), and it auto-falls-back to a LOCAL Lighthouse run if PSI is over quota. Set local=true to force the local engine (no key, no quota; needs Chrome on the host; no CrUX field data; runs headless Chrome silently).',
+      inputSchema: {
+        url: z.string().describe('Page URL'),
+        strategy: z.enum(['mobile', 'desktop']).describe('"mobile" (default) or "desktop"').optional(),
+        local: z.boolean().describe('Force the local Lighthouse engine instead of Google PSI (no API key/quota; requires Chrome installed; lab metrics only). Default false.').optional(),
+        detail: z.boolean().describe('Return the full GTmetrix-style detail: all four category scores (Performance, Accessibility, Best Practices, SEO), diagnostics (server response, DOM size, page weight, request count), resource breakdown, prioritized suggestions with descriptions, and passed best-practice checks. Default false.').optional(),
+      },
+    },
+    async (args) => dispatchToolCall('pagespeed', args),
+  );
 }
