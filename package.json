@@ -1,6 +1,6 @@
 {
   "name": "@mehmoodqureshi/seo-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "An SEO MCP server (stdio CLI). Free, keyless on-page & technical SEO tools — single-page and site-wide audits, robots.txt, sitemap, structured-data, broken-link and keyword checks, professional PDF reports, plus PageSpeed/Lighthouse (Google PSI or local headless Chrome) with full Core Web Vitals.",
   "author": "Mehmood Ur Rehman Qureshi",
   "license": "MIT",

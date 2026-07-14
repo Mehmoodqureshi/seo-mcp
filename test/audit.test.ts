@@ -64,6 +64,73 @@ test('auditPage flags missing title, h1, and meta description', async () => {
   }
 });
 
+test('auditPage treats a self-referencing canonical as self and does not warn', async () => {
+  clearHttpCache();
+  const restore = stubFetch({ 'https://ex.com/': { body: GOOD_PAGE } });
+  try {
+    const a = await auditPage('https://ex.com/');
+    assert.equal(a.canonicalUrl, 'https://ex.com/');
+    assert.equal(a.canonicalSelf, true);
+    assert.ok(!a.issues.some((i) => /Canonical points to a different URL/.test(i.message)));
+  } finally {
+    restore();
+    clearHttpCache();
+  }
+});
+
+test('auditPage warns when the canonical points to a different page', async () => {
+  clearHttpCache();
+  const page = `<!doctype html><html lang="en"><head>
+    <title>Widgets page with a perfectly reasonable title</title>
+    <link rel="canonical" href="https://ex.com/other-page">
+  </head><body><h1>Hi</h1></body></html>`;
+  const restore = stubFetch({ 'https://ex.com/page': { body: page } });
+  try {
+    const a = await auditPage('https://ex.com/page');
+    assert.equal(a.canonicalUrl, 'https://ex.com/other-page');
+    assert.equal(a.canonicalSelf, false);
+    assert.match(a.issues.map((i) => i.message).join(' | '), /Canonical points to a different URL/);
+    assert.ok(a.issues.some((i) => i.severity === 'warning' && /Canonical points/.test(i.message)));
+  } finally {
+    restore();
+    clearHttpCache();
+  }
+});
+
+test('auditPage ignores trailing-slash/query differences in the canonical', async () => {
+  clearHttpCache();
+  const page = `<!doctype html><html lang="en"><head>
+    <title>Widgets page with a perfectly reasonable title</title>
+    <link rel="canonical" href="https://ex.com/page">
+  </head><body><h1>Hi</h1></body></html>`;
+  const restore = stubFetch({ 'https://ex.com/page/?utm_source=nl': { body: page } });
+  try {
+    const a = await auditPage('https://ex.com/page/?utm_source=nl');
+    assert.equal(a.canonicalSelf, true);
+    assert.ok(!a.issues.some((i) => /Canonical points to a different URL/.test(i.message)));
+  } finally {
+    restore();
+    clearHttpCache();
+  }
+});
+
+test('auditPage flags an invalid canonical href', async () => {
+  clearHttpCache();
+  const page = `<!doctype html><html lang="en"><head>
+    <title>Widgets page with a perfectly reasonable title</title>
+    <link rel="canonical" href="http://">
+  </head><body><h1>Hi</h1></body></html>`;
+  const restore = stubFetch({ 'https://ex.com/bad-canon': { body: page } });
+  try {
+    const a = await auditPage('https://ex.com/bad-canon');
+    assert.equal(a.canonicalUrl, null);
+    assert.match(a.issues.map((i) => i.message).join(' | '), /Canonical href is not a valid URL/);
+  } finally {
+    restore();
+    clearHttpCache();
+  }
+});
+
 test('auditPage reports a non-200 as an error', async () => {
   clearHttpCache();
   const restore = stubFetch({ 'https://gone.com/': { body: 'Not Found', status: 404 } });

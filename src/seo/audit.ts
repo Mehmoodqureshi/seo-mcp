@@ -55,7 +55,23 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
 
   // Core head signals
   const canonical = $('link[rel="canonical"]').attr('href')?.trim() ?? null;
-  if (!canonical) issues.push({ severity: 'info', message: 'No canonical link', fix: 'Add <link rel="canonical"> pointing to the preferred URL to consolidate duplicates and signal the canonical version.' });
+  // Resolve the canonical against the page URL and work out whether it is
+  // self-referencing or points elsewhere — a cross-canonical tells search
+  // engines not to index this URL under its own address, which is easy to ship
+  // by accident (e.g. a stray template canonical) and worth surfacing.
+  let canonicalUrl: string | null = null;
+  let canonicalSelf: boolean | null = null;
+  if (!canonical) {
+    issues.push({ severity: 'info', message: 'No canonical link', fix: 'Add <link rel="canonical"> pointing to the preferred URL to consolidate duplicates and signal the canonical version.' });
+  } else {
+    try {
+      canonicalUrl = new URL(canonical, res.finalUrl).toString();
+      canonicalSelf = samePage(canonicalUrl, res.finalUrl);
+      if (!canonicalSelf) issues.push({ severity: 'warning', message: `Canonical points to a different URL (${canonicalUrl}) — this page may be deindexed in favor of it`, fix: 'If this page should rank on its own, make the canonical self-referencing (point it at this URL). Only canonicalize to another URL when this is a genuine duplicate/variant that should defer to it.' });
+    } catch {
+      issues.push({ severity: 'warning', message: `Canonical href is not a valid URL ("${canonical}")`, fix: 'Set rel="canonical" to an absolute, resolvable URL (ideally the page\'s own https:// address).' });
+    }
+  }
   const metaRobots = $('meta[name="robots"]').attr('content')?.trim() ?? null;
   if (metaRobots && /noindex/i.test(metaRobots)) issues.push({ severity: 'error', message: `Page is noindex (meta robots="${metaRobots}")`, fix: 'If this page should rank, remove the noindex directive. If it is intentionally hidden (thank-you/admin page), this is fine — ignore.' });
   const viewport = $('meta[name="viewport"]').attr('content')?.trim() ?? null;
@@ -137,6 +153,8 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
     title: { text: title, length: title.length },
     metaDescription: { text: metaDescription, length: metaDescription.length },
     canonical,
+    canonicalUrl,
+    canonicalSelf,
     metaRobots,
     viewport,
     charset,
@@ -153,6 +171,23 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
     score: scoreFromIssues(issues),
     ...(pagespeed ? { pagespeed } : {}),
   };
+}
+
+/**
+ * Whether two URLs address the same page for canonical purposes: same host and
+ * path, ignoring protocol, trailing slash, query string, and fragment. Kept
+ * lenient so http/https and tracking-param variants aren't flagged as
+ * cross-canonical.
+ */
+function samePage(a: string, b: string): boolean {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    const path = (u: URL) => u.pathname.replace(/\/+$/, '') || '/';
+    return ua.host.toLowerCase() === ub.host.toLowerCase() && path(ua) === path(ub);
+  } catch {
+    return false;
+  }
 }
 
 /** Crude 0–100 health score from issue severities. */
