@@ -55,6 +55,16 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
 
   // Core head signals
   const canonical = $('link[rel="canonical"]').attr('href')?.trim() ?? null;
+  // Multiple canonical tags with conflicting targets are a common template bug:
+  // when a page declares more than one distinct canonical URL, search engines
+  // may ignore all of them and pick a canonical unpredictably. Count the
+  // distinct hrefs so we can flag genuine conflicts (identical duplicates are
+  // harmless and left unflagged).
+  const canonicalHrefs = $('link[rel="canonical"]').map((_, el) => $(el).attr('href')?.trim()).get().filter(Boolean);
+  const distinctCanonicals = new Set(canonicalHrefs);
+  if (distinctCanonicals.size > 1) {
+    issues.push({ severity: 'warning', message: `${distinctCanonicals.size} conflicting canonical URLs declared — search engines may ignore all of them`, fix: 'Declare exactly one <link rel="canonical">. Remove the extras so the preferred URL is unambiguous.' });
+  }
   // Resolve the canonical against the page URL and work out whether it is
   // self-referencing or points elsewhere — a cross-canonical tells search
   // engines not to index this URL under its own address, which is easy to ship
@@ -155,6 +165,7 @@ export async function auditPage(rawUrl: string, opts: AuditOptions = {}) {
     canonical,
     canonicalUrl,
     canonicalSelf,
+    canonicalCount: canonicalHrefs.length,
     metaRobots,
     viewport,
     charset,

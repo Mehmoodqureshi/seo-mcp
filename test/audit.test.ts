@@ -114,6 +114,43 @@ test('auditPage ignores trailing-slash/query differences in the canonical', asyn
   }
 });
 
+test('auditPage flags multiple conflicting canonical tags', async () => {
+  clearHttpCache();
+  const page = `<!doctype html><html lang="en"><head>
+    <title>Widgets page with a perfectly reasonable title</title>
+    <link rel="canonical" href="https://ex.com/page">
+    <link rel="canonical" href="https://ex.com/other-page">
+  </head><body><h1>Hi</h1></body></html>`;
+  const restore = stubFetch({ 'https://ex.com/page': { body: page } });
+  try {
+    const a = await auditPage('https://ex.com/page');
+    assert.equal(a.canonicalCount, 2);
+    assert.match(a.issues.map((i) => i.message).join(' | '), /2 conflicting canonical URLs/);
+    assert.ok(a.issues.some((i) => i.severity === 'warning' && /conflicting canonical/.test(i.message)));
+  } finally {
+    restore();
+    clearHttpCache();
+  }
+});
+
+test('auditPage does not flag duplicate identical canonical tags as conflicting', async () => {
+  clearHttpCache();
+  const page = `<!doctype html><html lang="en"><head>
+    <title>Widgets page with a perfectly reasonable title</title>
+    <link rel="canonical" href="https://ex.com/page">
+    <link rel="canonical" href="https://ex.com/page">
+  </head><body><h1>Hi</h1></body></html>`;
+  const restore = stubFetch({ 'https://ex.com/page': { body: page } });
+  try {
+    const a = await auditPage('https://ex.com/page');
+    assert.equal(a.canonicalCount, 2);
+    assert.ok(!a.issues.some((i) => /conflicting canonical/.test(i.message)));
+  } finally {
+    restore();
+    clearHttpCache();
+  }
+});
+
 test('auditPage flags an invalid canonical href', async () => {
   clearHttpCache();
   const page = `<!doctype html><html lang="en"><head>
