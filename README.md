@@ -20,30 +20,9 @@ Built on the same proven scaffold as [`chrome-mcp`](https://github.com/Mehmoodqu
 | `keyword_ideas` | Related queries for a seed term via Google Suggest (no volume) |
 | `pagespeed` | Google PageSpeed Insights (Lighthouse): perf score, lab Core Web Vitals + real-user CrUX field data + top opportunities. Keyless (rate-limited); set `PAGESPEED_API_KEY` to raise the quota |
 
-## Install & build
-
-```bash
-npm install
-npm run build      # → dist/src/cli.js
-```
-
 ## Use it as an MCP server
 
-Add to your MCP host config (e.g. a project `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "seo-mcp": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["/Users/mehmoodqureshi/Work/seo-mcp/dist/src/cli.js"]
-    }
-  }
-}
-```
-
-If the package is installed (globally or via `npx`), use the published `seo-mcp` bin instead of a `node` + path — no build step or absolute path needed:
+Requires **Node 20+**. There is nothing to clone, build, or configure — add this to your MCP host config (e.g. a project `.mcp.json`) and restart the host:
 
 ```json
 {
@@ -57,7 +36,39 @@ If the package is installed (globally or via `npx`), use the published `seo-mcp`
 }
 ```
 
+Or with Claude Code: `claude mcp add seo-mcp -- npx -y @mehmoodqureshi/seo-mcp`
+
 Or, after `npm install -g @mehmoodqureshi/seo-mcp`, set `"command": "seo-mcp"` with no args.
+
+### Windows
+
+WSL2 is **not** required — native Windows works. One config change is, though: on Windows `npx` is `npx.cmd`, a batch shim, and MCP hosts spawn the server without a shell, which cannot execute a `.cmd`. So `"command": "npx"` fails to start. Wrap it in `cmd /c`:
+
+```json
+{
+  "mcpServers": {
+    "seo-mcp": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@mehmoodqureshi/seo-mcp"]
+    }
+  }
+}
+```
+
+Or: `claude mcp add seo-mcp -- cmd /c npx -y @mehmoodqureshi/seo-mcp`
+
+## Develop
+
+From a source checkout:
+
+```bash
+npm install
+npm run build      # → dist/src/cli.js
+npm test
+```
+
+Then point your host at the local build with `"command": "node", "args": ["<abs-path>/dist/src/cli.js"]`.
 
 Then ask things like *"audit https://example.com for SEO"* or *"what does example.com's robots.txt block?"*.
 
